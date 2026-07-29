@@ -111,7 +111,7 @@ def main():
         return
 
     title = f"{'⚠️' if need_alert else '📊'} 基金日报 - {datetime.date.today()}"
-    url = f"https://sct.ftqq.com/{SENDKEY}.send"
+    url = f"https://sctapi.ftqq.com/{SENDKEY}.send"
     data = urllib.parse.urlencode({"title": title, "desp": output}).encode()
     try:
         resp = urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=10)
