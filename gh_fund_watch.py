@@ -33,7 +33,87 @@ def fetch_nav(code):
     return result
 
 
-def analyze_fund(fund):
+def fetch_index_kline(days=60):
+    url = ("http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+           "CN_MarketData.getKLineData?symbol=sh000300&scale=240&datalen=" + str(days))
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    raw = urllib.request.urlopen(req, timeout=15).read()
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        return None
+    result = []
+    for d in data:
+        result.append({
+            "date": d["day"][:10],
+            "close": float(d["close"]),
+            "ma5": float(d.get("ma_price5", 0)),
+            "ma10": float(d.get("ma_price10", 0)),
+            "ma30": float(d.get("ma_price30", 0)),
+        })
+    return result
+
+
+def analyze_sentiment():
+    kline = fetch_index_kline(60)
+    if not kline or len(kline) < 5:
+        return "中性", 0, None
+
+    latest = kline[-1]
+    current = latest["close"]
+
+    closes = [k["close"] for k in kline]
+    ma10 = latest.get("ma10", sum(closes[-10:]) / 10) if len(closes) >= 10 else sum(closes) / len(closes)
+    ma30 = latest.get("ma30", sum(closes[-30:]) / 30) if len(closes) >= 30 else sum(closes) / len(closes)
+
+    chg5 = (closes[-1] - closes[-5]) / closes[-5] * 100 if len(closes) >= 5 else 0
+    chg20 = (closes[-1] - closes[-20]) / closes[-20] * 100 if len(closes) >= 20 else chg5
+
+    score = 0
+    if current > ma10:
+        score += 2
+    if current > ma30:
+        score += 2
+    if chg5 > 2:
+        score += 2
+    elif chg5 > 0:
+        score += 1
+    elif chg5 < -2:
+        score -= 2
+    elif chg5 < 0:
+        score -= 1
+    if chg20 > 5:
+        score += 2
+    elif chg20 > 2:
+        score += 1
+    elif chg20 < -5:
+        score -= 2
+    elif chg20 < -2:
+        score -= 1
+
+    if score >= 4:
+        label = "强势"
+    elif score <= -3:
+        label = "弱势"
+    else:
+        label = "中性"
+
+    return label, score, {"current": current, "ma10": ma10, "ma30": ma30, "chg5": chg5, "chg20": chg20}
+
+
+def get_dynamic_rules(sentiment):
+    rules = dict(RULES)
+    if sentiment == "强势":
+        rules["take_profit"] = 30
+        rules["stop_loss"] = -15
+        rules["max_drawdown"] = 15
+    elif sentiment == "弱势":
+        rules["take_profit"] = 15
+        rules["stop_loss"] = -8
+        rules["max_drawdown"] = 8
+    return rules
+
+
+def analyze_fund(fund, rules):
     code = fund["code"]
     buy_price = fund["buy_price"]
     name = fund["name"]
@@ -69,16 +149,16 @@ def analyze_fund(fund):
         drawdown = (peak - current_nav) / peak * 100
 
     actions = []
-    if gain >= RULES["take_profit"]:
-        actions.append(f"[止盈] 达到目标 +{RULES['take_profit']}%, 建议卖出")
-    elif gain <= RULES["stop_loss"]:
-        actions.append(f"[止损] 触及止损 {RULES['stop_loss']}%, 建议卖出")
-    elif drawdown >= RULES["max_drawdown"]:
-        actions.append(f"[回撤] 从高点回撤 {drawdown:.1f}%, 建议卖出")
-    elif gain >= 15:
-        actions.append(f"[接近止盈] 收益+{gain:.1f}%, 接近目标")
+    if gain >= rules["take_profit"]:
+        actions.append(f"[止盈] 收益+{gain:.1f}%, 超过目标+{rules['take_profit']}%, 建议卖出")
+    elif gain <= rules["stop_loss"]:
+        actions.append(f"[止损] 亏损{gain:.1f}%, 触及止损{rules['stop_loss']}%, 建议卖出")
+    elif drawdown >= rules["max_drawdown"]:
+        actions.append(f"[回撤] 从高点回撤{drawdown:.1f}%, 超过{rules['max_drawdown']}%, 建议卖出")
+    elif gain >= rules["take_profit"] * 0.75:
+        actions.append(f"[接近止盈] 收益+{gain:.1f}%, 接近目标+{rules['take_profit']}%")
     elif gain < 0:
-        actions.append(f"[持有] 亏损{gain:.1f}%, 距止损还有{gain-RULES['stop_loss']:.1f}%")
+        actions.append(f"[持有] 亏损{gain:.1f}%, 距止损还有{gain - rules['stop_loss']:.1f}%")
     else:
         actions.append(f"[持有] 收益+{gain:.1f}%")
 
@@ -92,12 +172,23 @@ def analyze_fund(fund):
 
 def main():
     lines = []
-    lines.append(f"基金卖出提醒 - {datetime.date.today()}")
+    lines.append(f"基金日报 - {datetime.date.today()}")
     lines.append("=" * 40)
+
+    sentiment_label, sentiment_score, sent_data = analyze_sentiment()
+    lines.append(f"\n市场情绪: {sentiment_label}")
+    if sent_data:
+        lines.append(f"  沪深300: {sent_data['current']:.0f}")
+        lines.append(f"  10日均线: {sent_data['ma10']:.0f}  30日均线: {sent_data['ma30']:.0f}")
+        lines.append(f"  近5日: {sent_data['chg5']:+.2f}%  近20日: {sent_data['chg20']:+.2f}%")
+    lines.append("")
+
+    rules = get_dynamic_rules(sentiment_label)
+    lines.append(f"当前规则: 止盈+{rules['take_profit']}% | 止损{rules['stop_loss']}% | 回撤>{rules['max_drawdown']}%卖出")
 
     need_alert = False
     for fund in FUNDS:
-        r = analyze_fund(fund)
+        r = analyze_fund(fund, rules)
         if not r:
             lines.append(f"\n{f['name']} - 获取净值失败")
             continue
@@ -112,9 +203,6 @@ def main():
             if a.startswith("[止盈]") or a.startswith("[止损]") or a.startswith("[回撤]"):
                 need_alert = True
 
-    lines.append(f"\n{'=' * 40}")
-    lines.append("止盈+20% | 止损-10% | 回撤超10%卖出")
-
     output = "\n".join(lines)
     print(output)
 
@@ -122,7 +210,7 @@ def main():
         print("\n[SCT_SENDKEY 未设置，跳过推送]")
         return
 
-    title = f"{'⚠️' if need_alert else '📊'} 基金日报 - {datetime.date.today()}"
+    title = f"{'[ALERT]' if need_alert else '[DAILY]'} 基金日报 - {sentiment_label} - {datetime.date.today()}"
     url = f"https://sctapi.ftqq.com/{SENDKEY}.send"
     data = urllib.parse.urlencode({"title": title, "desp": output}).encode()
     try:
