@@ -2,8 +2,8 @@ import urllib.request, urllib.parse, json, re, os, datetime
 
 # ===== 配置区 =====
 FUNDS = [
-    {"code": "005844", "name": "东方人工智能A", "buy_price": 0},
-    {"code": "481015", "name": "工银战略性A", "buy_price": 0},
+    {"code": "005844", "name": "东方人工智能A", "buy_price": 0, "buy_date": "2026-07-30"},
+    {"code": "481015", "name": "工银战略性A", "buy_price": 0, "buy_date": "2026-07-30"},
 ]
 RULES = {"take_profit": 20, "stop_loss": -10, "max_drawdown": 10}
 SENDKEY = os.environ.get("SCT_SENDKEY", "")
@@ -37,9 +37,21 @@ def analyze_fund(fund):
     code = fund["code"]
     buy_price = fund["buy_price"]
     name = fund["name"]
+    buy_date = fund.get("buy_date", "")
     history = fetch_nav(code)
     if not history:
         return None
+
+    if buy_price == 0 and buy_date:
+        for h in history:
+            if h["date"] == buy_date:
+                buy_price = h["nav"]
+                fund["buy_price"] = buy_price
+                break
+        if buy_price == 0:
+            buy_price = history[0]["nav"]
+            fund["buy_price"] = buy_price
+            buy_date = history[0]["date"]
 
     latest = history[0]
     current_nav = latest["nav"]
@@ -73,7 +85,8 @@ def analyze_fund(fund):
     return {
         "name": name, "code": code, "today": today,
         "current_nav": current_nav, "buy_price": buy_price,
-        "gain": gain, "peak": peak, "drawdown": drawdown, "actions": actions,
+        "buy_date": buy_date, "gain": gain, "peak": peak,
+        "drawdown": drawdown, "actions": actions,
     }
 
 
@@ -89,7 +102,7 @@ def main():
             lines.append(f"\n{f['name']} - 获取净值失败")
             continue
         lines.append(f"\n{r['name']} ({r['code']})")
-        lines.append(f"  买入: {r['buy_price']:.4f}")
+        lines.append(f"  买入价: {r['buy_price']:.4f} ({r['buy_date']})")
         lines.append(f"  最新: {r['current_nav']:.4f} ({r['today']})")
         lines.append(f"  收益: {'+' if r['gain']>=0 else ''}{r['gain']:.2f}%")
         if r['peak']:
