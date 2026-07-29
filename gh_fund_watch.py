@@ -106,13 +106,18 @@ def main():
     output = "\n".join(lines)
     print(output)
 
-    if need_alert and SENDKEY:
-        url = f"https://sct.ftqq.com/{SENDKEY}.send"
-        data = urllib.parse.urlencode({
-            "title": f"基金提醒 - {datetime.date.today()}",
-            "desp": output,
-        }).encode()
-        urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=10)
+    if not SENDKEY:
+        print("\n[SCT_SENDKEY 未设置，跳过推送]")
+        return
+
+    title = f"{'⚠️' if need_alert else '📊'} 基金日报 - {datetime.date.today()}"
+    url = f"https://sct.ftqq.com/{SENDKEY}.send"
+    data = urllib.parse.urlencode({"title": title, "desp": output}).encode()
+    try:
+        resp = urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=10)
+        print(f"\n[推送结果] {resp.read().decode()}")
+    except Exception as e:
+        print(f"\n[推送失败] {e}")
 
 
 if __name__ == "__main__":
