@@ -1,0 +1,20 @@
+name: 基金卖出提醒
+
+on:
+  schedule:
+    - cron: '0 11 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 运行基金监控脚本
+        env:
+          SCT_SENDKEY: ${{ secrets.SCT_SENDKEY }}
+        run: python gh_fund_watch.py
