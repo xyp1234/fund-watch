@@ -2,9 +2,8 @@ import urllib.request, urllib.parse, json, re, os, datetime
 
 # ===== 配置区 =====
 FUNDS = [
-    {"code": "005844", "name": "东方人工智能A", "buy_price": 3.3056},
-    {"code": "481015", "name": "工银战略性A", "buy_price": 9.2570},
-    {"code": "021179", "name": "易方达产业机遇A", "buy_price": 3.0661},
+    {"code": "005844", "name": "东方人工智能A", "buy_price": 0},
+    {"code": "481015", "name": "工银战略性A", "buy_price": 0},
 ]
 RULES = {"take_profit": 20, "stop_loss": -10, "max_drawdown": 10}
 SENDKEY = os.environ.get("SCT_SENDKEY", "")
