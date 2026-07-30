@@ -138,10 +138,10 @@ def analyze_fund(fund, rules):
     today = latest["date"]
     gain = (current_nav - buy_price) / buy_price * 100
 
-    peak = None
+    peak = buy_price
     for h in history:
-        if h["date"] >= "2026-07-29":
-            if peak is None or h["nav"] > peak:
+        if h["date"] >= buy_date:
+            if h["nav"] > peak:
                 peak = h["nav"]
 
     drawdown = 0
