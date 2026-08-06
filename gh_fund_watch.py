@@ -6,6 +6,7 @@ FUNDS = [
     {"code": "481015", "name": "工银战略性A", "buy_price": 0, "buy_date": "2026-07-30", "type": "trade"},
     {"code": "006479", "name": "广发纳指100联接A", "buy_price": 7.5087, "buy_date": "", "type": "watch"},
     {"code": "000218", "name": "国泰黄金联接A", "buy_price": 3.5427, "buy_date": "", "type": "watch"},
+    {"code": "022364", "name": "华盈科技精选混合A", "buy_price": 3.6179, "buy_date": "", "type": "trade"},
 ]
 RULES = {"take_profit": 20, "stop_loss": -10, "max_drawdown": 10}
 SENDKEY = os.environ.get("SCT_SENDKEY", "")
