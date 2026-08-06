@@ -2,10 +2,10 @@ import urllib.request, urllib.parse, json, re, os, datetime, statistics
 
 # ===== 配置区 =====
 FUNDS = [
-    {"code": "005844", "name": "东方人工智能A", "buy_price": 0, "buy_date": "2026-07-30", "type": "trade", "amount": 400},
-    {"code": "481015", "name": "工银战略性A", "buy_price": 0, "buy_date": "2026-07-30", "type": "trade", "amount": 300},
-    {"code": "006479", "name": "广发纳指100联接A", "buy_price": 7.5087, "buy_date": "", "type": "watch", "amount": 340},
-    {"code": "000218", "name": "国泰黄金联接A", "buy_price": 3.5427, "buy_date": "", "type": "watch", "amount": 316},
+    {"code": "005844", "name": "东方人工智能A", "buy_price": 0, "buy_date": "2026-07-30", "type": "trade", "amount": 371.07},
+    {"code": "481015", "name": "工银战略性A", "buy_price": 0, "buy_date": "2026-07-30", "type": "trade", "amount": 278.13},
+    {"code": "006479", "name": "广发纳指100联接A", "buy_price": 7.5087, "buy_date": "", "type": "watch", "amount": 317.64},
+    {"code": "000218", "name": "国泰黄金联接A", "buy_price": 3.5427, "buy_date": "", "type": "watch", "amount": 335.00},
     {"code": "022364", "name": "华盈科技精选混合A", "buy_price": 3.6179, "buy_date": "", "type": "trade", "amount": 100,
      "staged": [
          {"at": 30, "action": "卖1/3锁利"},
