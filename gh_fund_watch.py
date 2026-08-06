@@ -6,7 +6,12 @@ FUNDS = [
     {"code": "481015", "name": "工银战略性A", "buy_price": 0, "buy_date": "2026-07-30", "type": "trade"},
     {"code": "006479", "name": "广发纳指100联接A", "buy_price": 7.5087, "buy_date": "", "type": "watch"},
     {"code": "000218", "name": "国泰黄金联接A", "buy_price": 3.5427, "buy_date": "", "type": "watch"},
-    {"code": "022364", "name": "华盈科技精选混合A", "buy_price": 3.6179, "buy_date": "", "type": "trade"},
+    {"code": "022364", "name": "华盈科技精选混合A", "buy_price": 3.6179, "buy_date": "", "type": "trade",
+     "staged": [
+         {"at": 30, "action": "卖1/3锁利"},
+         {"at": 50, "action": "再卖1/3"},
+         {"at": 70, "action": "全部清仓"},
+     ]},
 ]
 RULES = {"take_profit": 20, "stop_loss": -10, "max_drawdown": 10}
 SENDKEY = os.environ.get("SCT_SENDKEY", "")
@@ -158,6 +163,26 @@ def analyze_fund(fund, rules):
             actions.append(f"[观察] 亏损{gain:.1f}% (定投/避险品种，按计划继续)")
         else:
             actions.append(f"[观察] 收益+{gain:.1f}% (定投/避险品种，按计划继续)")
+    elif fund.get("staged"):
+        stages = sorted(fund["staged"], key=lambda s: s["at"])
+        if gain <= rules["stop_loss"]:
+            actions.append(f"[止损] 亏损{gain:.1f}%, 触及止损{rules['stop_loss']}%, 建议卖出")
+        elif drawdown >= rules["max_drawdown"]:
+            actions.append(f"[回撤] 从高点回撤{drawdown:.1f}%, 超过{rules['max_drawdown']}%, 建议卖出")
+        else:
+            reached = [s for s in stages if gain >= s["at"]]
+            nxt = next((s for s in stages if gain < s["at"]), None)
+            if reached:
+                last = reached[-1]
+                if nxt:
+                    actions.append(
+                        f"[分批止盈] 已达+{last['at']}%: {last['action']}; 下一档+{nxt['at']}%: {nxt['action']}")
+                else:
+                    actions.append(
+                        f"[分批止盈] 已达+{last['at']}%: {last['action']}; 已到最后一档, 建议清仓")
+            else:
+                actions.append(
+                    f"[持有] 收益+{gain:.1f}%, 距第一档止盈+{stages[0]['at']}%还差{stages[0]['at'] - gain:.1f}%")
     elif gain >= rules["take_profit"]:
         actions.append(f"[止盈] 收益+{gain:.1f}%, 超过目标+{rules['take_profit']}%, 建议卖出")
     elif gain <= rules["stop_loss"]:
@@ -212,7 +237,7 @@ def main():
             lines.append(f"  回撤: {r['drawdown']:.2f}%")
         for a in r["actions"]:
             lines.append(f"  >> {a}")
-            if a.startswith("[止盈]") or a.startswith("[止损]") or a.startswith("[回撤]"):
+            if a.startswith("[止盈]") or a.startswith("[止损]") or a.startswith("[回撤]") or a.startswith("[分批止盈]"):
                 need_alert = True
 
     output = "\n".join(lines)
