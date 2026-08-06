@@ -1,12 +1,12 @@
-import urllib.request, urllib.parse, json, re, os, datetime
+import urllib.request, urllib.parse, json, re, os, datetime, statistics
 
 # ===== 配置区 =====
 FUNDS = [
-    {"code": "005844", "name": "东方人工智能A", "buy_price": 0, "buy_date": "2026-07-30", "type": "trade"},
-    {"code": "481015", "name": "工银战略性A", "buy_price": 0, "buy_date": "2026-07-30", "type": "trade"},
-    {"code": "006479", "name": "广发纳指100联接A", "buy_price": 7.5087, "buy_date": "", "type": "watch"},
-    {"code": "000218", "name": "国泰黄金联接A", "buy_price": 3.5427, "buy_date": "", "type": "watch"},
-    {"code": "022364", "name": "华盈科技精选混合A", "buy_price": 3.6179, "buy_date": "", "type": "trade",
+    {"code": "005844", "name": "东方人工智能A", "buy_price": 0, "buy_date": "2026-07-30", "type": "trade", "amount": 400},
+    {"code": "481015", "name": "工银战略性A", "buy_price": 0, "buy_date": "2026-07-30", "type": "trade", "amount": 300},
+    {"code": "006479", "name": "广发纳指100联接A", "buy_price": 7.5087, "buy_date": "", "type": "watch", "amount": 340},
+    {"code": "000218", "name": "国泰黄金联接A", "buy_price": 3.5427, "buy_date": "", "type": "watch", "amount": 316},
+    {"code": "022364", "name": "华盈科技精选混合A", "buy_price": 3.6179, "buy_date": "", "type": "trade", "amount": 146.95,
      "staged": [
          {"at": 30, "action": "卖1/3锁利"},
          {"at": 50, "action": "再卖1/3"},
@@ -15,6 +15,13 @@ FUNDS = [
 ]
 RULES = {"take_profit": 20, "stop_loss": -10, "max_drawdown": 10}
 SENDKEY = os.environ.get("SCT_SENDKEY", "")
+
+# 事件日历: 已知风险节点 (start~end 窗口内预警)
+EVENTS = [
+    {"start": "2026-08-10", "end": "2026-08-31", "label": "中美PNTR贸易调查结论窗口", "risk": "high"},
+    {"start": "2026-09-09", "end": "2026-09-18", "label": "美联储利率决议(9/17 02:00, 鹰派加息风险)", "risk": "high"},
+    {"start": "2026-11-01", "end": "2026-11-12", "label": "中美临时关税停火协议到期", "risk": "high"},
+]
 # =================
 
 
@@ -41,9 +48,9 @@ def fetch_nav(code):
     return result
 
 
-def fetch_index_kline(days=60):
+def fetch_index_kline(symbol, days=60):
     url = ("http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-           "CN_MarketData.getKLineData?symbol=sh000300&scale=240&datalen=" + str(days))
+           "CN_MarketData.getKLineData?symbol=" + symbol + "&scale=240&datalen=" + str(days))
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     raw = urllib.request.urlopen(req, timeout=15).read()
     data = json.loads(raw)
@@ -61,18 +68,14 @@ def fetch_index_kline(days=60):
     return result
 
 
-def analyze_sentiment():
-    kline = fetch_index_kline(60)
+def analyze_sentiment(kline):
     if not kline or len(kline) < 5:
         return "中性", 0, None
-
     latest = kline[-1]
     current = latest["close"]
-
     closes = [k["close"] for k in kline]
     ma10 = latest.get("ma10", sum(closes[-10:]) / 10) if len(closes) >= 10 else sum(closes) / len(closes)
     ma30 = latest.get("ma30", sum(closes[-30:]) / 30) if len(closes) >= 30 else sum(closes) / len(closes)
-
     chg5 = (closes[-1] - closes[-5]) / closes[-5] * 100 if len(closes) >= 5 else 0
     chg20 = (closes[-1] - closes[-20]) / closes[-20] * 100 if len(closes) >= 20 else chg5
 
@@ -104,7 +107,6 @@ def analyze_sentiment():
         label = "弱势"
     else:
         label = "中性"
-
     return label, score, {"current": current, "ma10": ma10, "ma30": ma30, "chg5": chg5, "chg20": chg20}
 
 
@@ -119,6 +121,125 @@ def get_dynamic_rules(sentiment):
         rules["stop_loss"] = -8
         rules["max_drawdown"] = 8
     return rules
+
+
+def calc_momentum(history):
+    if not history or len(history) < 2:
+        return None, None, None, None
+    closes = [h["nav"] for h in history]
+    chg5 = (closes[0] - closes[4]) / closes[4] * 100 if len(closes) >= 5 else None
+    chg20 = (closes[0] - closes[19]) / closes[19] * 100 if len(closes) >= 20 else None
+    rets = []
+    for i in range(min(20, len(closes) - 1)):
+        rets.append((closes[i] - closes[i + 1]) / closes[i + 1])
+    vol20 = statistics.pstdev(rets) * 100 if len(rets) >= 3 else None
+    rets5 = rets[:5]
+    vol5 = statistics.pstdev(rets5) * 100 if len(rets5) >= 3 else None
+    vol_ratio = (vol5 / vol20) if (vol5 is not None and vol20) else None
+    return chg5, chg20, vol20, vol_ratio
+
+
+def _d(s):
+    return datetime.datetime.strptime(s, "%Y-%m-%d").date()
+
+
+def check_events(today):
+    t = _d(today)
+    hits = []
+    for ev in EVENTS:
+        s = _d(ev["start"])
+        e = _d(ev["end"])
+        if s <= t <= e:
+            days_left = (e - t).days
+            hits.append({"label": ev["label"], "risk": ev.get("risk", "medium"), "days_left": days_left})
+    return hits
+
+
+def format_ratio(r):
+    return f"{r*100:.0f}%"
+
+
+def decide_sell(r, rules, sentiment, tech_label, events):
+    gain = r["gain"]
+    drawdown = r["drawdown"]
+    chg5 = r["chg5"]
+    vol_ratio = r["vol_ratio"]
+    staged = r.get("staged")
+    ratio = 0
+    reasons = []
+
+    # 1) 基础判断
+    if gain <= rules["stop_loss"]:
+        ratio = 1.0
+        reasons.append(f"触及止损{rules['stop_loss']}%, 建议清仓")
+    elif drawdown >= rules["max_drawdown"]:
+        ratio = 1.0
+        reasons.append(f"从高点回撤{drawdown:.1f}%> {rules['max_drawdown']}%, 建议清仓")
+    elif staged:
+        stages = sorted(staged, key=lambda s: s["at"])
+        reached = [s for s in stages if gain >= s["at"]]
+        nxt = next((s for s in stages if gain < s["at"]), None)
+        if reached:
+            ratio = 1.0 if reached[-1] is stages[-1] else 1 / 3
+            reasons.append(f"已到分批止盈档+{reached[-1]['at']}%: {reached[-1]['action']}")
+            if nxt:
+                reasons.append(f"下一档+{nxt['at']}%: {nxt['action']}")
+        else:
+            reasons.append(f"距分批止盈第一档+{stages[0]['at']}%还差{stages[0]['at'] - gain:.1f}%")
+    elif gain >= rules["take_profit"]:
+        ratio = 1 / 2
+        reasons.append(f"已超止盈+{rules['take_profit']}%")
+        if sentiment == "强势" and (chg5 or 0) > 0:
+            ratio = 1 / 3
+            reasons.append("但市场强势, 只先锁1/3")
+    elif gain >= rules["take_profit"] * 0.75:
+        if sentiment == "弱势":
+            ratio = 1 / 3
+            reasons.append(f"接近止盈+{rules['take_profit']}%且市场弱势, 提前锁利")
+        else:
+            reasons.append(f"接近止盈+{rules['take_profit']}%, 持有观察")
+    elif gain > 0:
+        if sentiment == "弱势" and gain >= 8:
+            ratio = 1 / 3
+            reasons.append(f"市场弱势, 盈利{gain:.0f}%先落袋1/3")
+        else:
+            reasons.append(f"收益+{gain:.1f}%, 未到止盈, 持有")
+    else:
+        reasons.append(f"亏损{gain:.1f}%, 未到止损, 持有")
+
+    # 2) 动量叠加: 短期急涨/急跌
+    if chg5 is not None:
+        if chg5 > 5:
+            if ratio > 0:
+                ratio = min(1.0, ratio + 1 / 3)
+            else:
+                ratio = 1 / 3
+            reasons.append(f"5日涨{chg5:.1f}%过快, 有获利回吐风险")
+        elif chg5 < -5 and gain > 5:
+            ratio = max(ratio, 1 / 2)
+            reasons.append(f"5日急跌{chg5:.1f}%, 利润在回吐, 保利润")
+        elif chg5 < -5 and gain <= 0:
+            ratio = max(ratio, 1 / 3)
+            reasons.append(f"5日急跌{chg5:.1f}%, 弱势加剧")
+
+    # 3) 波动率异常(黑天鹅预警)
+    if vol_ratio and vol_ratio > 2.0:
+        if ratio > 0:
+            ratio = min(1.0, ratio + 1 / 6)
+        reasons.append(f"近5日波动是20日的{vol_ratio:.1f}倍, 波动异常, 警惕黑天鹅")
+
+    # 4) 事件日历叠加
+    for ev in events:
+        reasons.append(f"[事件] {ev['label']} 剩{ev['days_left']}天")
+        if ev["risk"] == "high" and gain > 15:
+            ratio = max(ratio, 1 / 3)
+            reasons.append(f"事件风险高且盈利{gain:.0f}%, 至少锁利1/3")
+
+    if ratio <= 0:
+        return {"advice": "持有", "ratio": 0, "reasons": reasons}
+    if ratio >= 1:
+        return {"advice": "清仓", "ratio": 1.0, "reasons": reasons}
+    return {"advice": f"卖出{format_ratio(ratio)}", "ratio": ratio, "reasons": reasons}
 
 
 def analyze_fund(fund, rules):
@@ -152,73 +273,49 @@ def analyze_fund(fund, rules):
         if buy_date and h["date"] >= buy_date:
             if h["nav"] > peak:
                 peak = h["nav"]
-
     drawdown = 0
     if peak and peak > current_nav:
         drawdown = (peak - current_nav) / peak * 100
 
-    actions = []
-    if fund_type == "watch":
-        if gain < 0:
-            actions.append(f"[观察] 亏损{gain:.1f}% (定投/避险品种，按计划继续)")
-        else:
-            actions.append(f"[观察] 收益+{gain:.1f}% (定投/避险品种，按计划继续)")
-    elif fund.get("staged"):
-        stages = sorted(fund["staged"], key=lambda s: s["at"])
-        if gain <= rules["stop_loss"]:
-            actions.append(f"[止损] 亏损{gain:.1f}%, 触及止损{rules['stop_loss']}%, 建议卖出")
-        elif drawdown >= rules["max_drawdown"]:
-            actions.append(f"[回撤] 从高点回撤{drawdown:.1f}%, 超过{rules['max_drawdown']}%, 建议卖出")
-        else:
-            reached = [s for s in stages if gain >= s["at"]]
-            nxt = next((s for s in stages if gain < s["at"]), None)
-            if reached:
-                last = reached[-1]
-                if nxt:
-                    actions.append(
-                        f"[分批止盈] 已达+{last['at']}%: {last['action']}; 下一档+{nxt['at']}%: {nxt['action']}")
-                else:
-                    actions.append(
-                        f"[分批止盈] 已达+{last['at']}%: {last['action']}; 已到最后一档, 建议清仓")
-            else:
-                actions.append(
-                    f"[持有] 收益+{gain:.1f}%, 距第一档止盈+{stages[0]['at']}%还差{stages[0]['at'] - gain:.1f}%")
-    elif gain >= rules["take_profit"]:
-        actions.append(f"[止盈] 收益+{gain:.1f}%, 超过目标+{rules['take_profit']}%, 建议卖出")
-    elif gain <= rules["stop_loss"]:
-        actions.append(f"[止损] 亏损{gain:.1f}%, 触及止损{rules['stop_loss']}%, 建议卖出")
-    elif drawdown >= rules["max_drawdown"]:
-        actions.append(f"[回撤] 从高点回撤{drawdown:.1f}%, 超过{rules['max_drawdown']}%, 建议卖出")
-    elif gain >= rules["take_profit"] * 0.75:
-        actions.append(f"[接近止盈] 收益+{gain:.1f}%, 接近目标+{rules['take_profit']}%")
-    elif gain < 0:
-        actions.append(f"[持有] 亏损{gain:.1f}%, 距止损还有{gain - rules['stop_loss']:.1f}%")
-    else:
-        actions.append(f"[持有] 收益+{gain:.1f}%")
+    chg5, chg20, vol20, vol_ratio = calc_momentum(history)
 
     return {
         "name": name, "code": code, "today": today,
         "current_nav": current_nav, "buy_price": buy_price,
         "buy_date": buy_date, "gain": gain, "peak": peak,
-        "drawdown": drawdown, "actions": actions, "type": fund_type,
+        "drawdown": drawdown, "type": fund_type,
+        "chg5": chg5, "chg20": chg20, "vol20": vol20, "vol_ratio": vol_ratio,
+        "staged": fund.get("staged"), "amount": fund.get("amount", 0),
     }
 
 
 def main():
+    today = datetime.date.today().isoformat()
     lines = []
-    lines.append(f"基金日报 - {datetime.date.today()}")
+    lines.append(f"基金日报 - {today}")
     lines.append("=" * 40)
 
-    sentiment_label, sentiment_score, sent_data = analyze_sentiment()
-    lines.append(f"\n市场情绪: {sentiment_label}")
-    if sent_data:
-        lines.append(f"  沪深300: {sent_data['current']:.0f}")
-        lines.append(f"  10日均线: {sent_data['ma10']:.0f}  30日均线: {sent_data['ma30']:.0f}")
-        lines.append(f"  近5日: {sent_data['chg5']:+.2f}%  近20日: {sent_data['chg20']:+.2f}%")
-    lines.append("")
+    hs = fetch_index_kline("sh000300", 60)
+    tech = fetch_index_kline("sh000688", 60)
+    sent_label, sent_score, sent_data = analyze_sentiment(hs)
+    tech_label, tech_score, tech_data = analyze_sentiment(tech)
 
-    rules = get_dynamic_rules(sentiment_label)
-    lines.append(f"当前规则: 止盈+{rules['take_profit']}% | 止损{rules['stop_loss']}% | 回撤>{rules['max_drawdown']}%卖出")
+    lines.append(f"\n市场情绪: {sent_label} (沪深300)")
+    if sent_data:
+        lines.append(f"  沪深300: {sent_data['current']:.0f} | MA10 {sent_data['ma10']:.0f} | MA30 {sent_data['ma30']:.0f}")
+        lines.append(f"  近5日 {sent_data['chg5']:+.1f}% | 近20日 {sent_data['chg20']:+.1f}%")
+    lines.append(f"\n科技板块: {tech_label} (科创50)")
+    if tech_data:
+        lines.append(f"  科创50: {tech_data['current']:.0f} | 近5日 {tech_data['chg5']:+.1f}% | 近20日 {tech_data['chg20']:+.1f}%")
+
+    events = check_events(today)
+    if events:
+        lines.append("\n风险事件:")
+        for ev in events:
+            lines.append(f"  ⚠ {ev['label']} 剩{ev['days_left']}天")
+
+    rules = get_dynamic_rules(sent_label)
+    lines.append(f"\n当前规则: 止盈+{rules['take_profit']}% | 止损{rules['stop_loss']}% | 回撤>{rules['max_drawdown']}%清仓")
 
     need_alert = False
     for fund in FUNDS:
@@ -227,27 +324,37 @@ def main():
             lines.append(f"\n{f['name']} - 获取净值失败")
             continue
         lines.append(f"\n{r['name']} ({r['code']})")
+        lines.append(f"  最新: {r['current_nav']:.4f} ({r['today']}) | 收益: {'+' if r['gain']>=0 else ''}{r['gain']:.2f}%")
+        if r['chg5'] is not None:
+            lines.append(f"  近5日: {r['chg5']:+.1f}% | 近20日: {r['chg20']:+.1f}% | 回撤: {r['drawdown']:.1f}%")
+
         if r['type'] == 'watch':
-            lines.append(f"  成本价: {r['buy_price']:.4f}")
+            if r['gain'] < 0:
+                lines.append(f"  >> [观察] 亏损{r['gain']:.1f}% (定投/避险品种, 按计划继续)")
+            else:
+                lines.append(f"  >> [观察] 收益+{r['gain']:.1f}% (定投/避险品种, 按计划继续)")
         else:
-            lines.append(f"  买入价: {r['buy_price']:.4f} ({r['buy_date']})")
-        lines.append(f"  最新: {r['current_nav']:.4f} ({r['today']})")
-        lines.append(f"  收益: {'+' if r['gain']>=0 else ''}{r['gain']:.2f}%")
-        if r['peak']:
-            lines.append(f"  回撤: {r['drawdown']:.2f}%")
-        for a in r["actions"]:
-            lines.append(f"  >> {a}")
-            if a.startswith("[止盈]") or a.startswith("[止损]") or a.startswith("[回撤]") or a.startswith("[分批止盈]"):
+            rec = decide_sell(r, rules, sent_label, tech_label, events)
+            mv = r['amount'] * (1 + r['gain'] / 100)
+            action_tag = "卖出" if rec["ratio"] > 0 else "持有"
+            if rec["advice"] == "持有":
+                lines.append(f"  >> [建议] 持有")
+            else:
+                part = mv * rec["ratio"]
+                lines.append(f"  >> [建议] {rec['advice']} (当前市值约{mv:.0f}元, 约卖出{part:.0f}元)")
+            for reason in rec["reasons"]:
+                lines.append(f"     · {reason}")
+            if rec["ratio"] >= 1 / 3:
                 need_alert = True
 
     output = "\n".join(lines)
     print(output)
 
     if not SENDKEY:
-        print("\n[SCT_SENDKEY 未设置，跳过推送]")
+        print("\n[SCT_SENDKEY 未设置, 跳过推送]")
         return
 
-    title = f"{'[ALERT]' if need_alert else '[DAILY]'} 基金日报 - {sentiment_label} - {datetime.date.today()}"
+    title = f"{'[ALERT]' if need_alert else '[DAILY]'} 基金日报 - {sent_label}/{tech_label} - {today}"
     url = f"https://sctapi.ftqq.com/{SENDKEY}.send"
     data = urllib.parse.urlencode({"title": title, "desp": output}).encode()
     try:
