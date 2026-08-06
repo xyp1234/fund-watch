@@ -17,4 +17,5 @@ jobs:
       - name: 运行基金监控脚本
         env:
           SCT_SENDKEY: ${{ secrets.SCT_SENDKEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: python gh_fund_watch.py
