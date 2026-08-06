@@ -2,8 +2,10 @@ import urllib.request, urllib.parse, json, re, os, datetime
 
 # ===== 配置区 =====
 FUNDS = [
-    {"code": "005844", "name": "东方人工智能A", "buy_price": 0, "buy_date": "2026-07-30"},
-    {"code": "481015", "name": "工银战略性A", "buy_price": 0, "buy_date": "2026-07-30"},
+    {"code": "005844", "name": "东方人工智能A", "buy_price": 0, "buy_date": "2026-07-30", "type": "trade"},
+    {"code": "481015", "name": "工银战略性A", "buy_price": 0, "buy_date": "2026-07-30", "type": "trade"},
+    {"code": "006479", "name": "广发纳指100联接A", "buy_price": 7.5087, "buy_date": "", "type": "watch"},
+    {"code": "000218", "name": "国泰黄金联接A", "buy_price": 3.5427, "buy_date": "", "type": "watch"},
 ]
 RULES = {"take_profit": 20, "stop_loss": -10, "max_drawdown": 10}
 SENDKEY = os.environ.get("SCT_SENDKEY", "")
@@ -118,6 +120,7 @@ def analyze_fund(fund, rules):
     buy_price = fund["buy_price"]
     name = fund["name"]
     buy_date = fund.get("buy_date", "")
+    fund_type = fund.get("type", "trade")
     history = fetch_nav(code)
     if not history:
         return None
@@ -140,7 +143,7 @@ def analyze_fund(fund, rules):
 
     peak = buy_price
     for h in history:
-        if h["date"] >= buy_date:
+        if buy_date and h["date"] >= buy_date:
             if h["nav"] > peak:
                 peak = h["nav"]
 
@@ -149,7 +152,12 @@ def analyze_fund(fund, rules):
         drawdown = (peak - current_nav) / peak * 100
 
     actions = []
-    if gain >= rules["take_profit"]:
+    if fund_type == "watch":
+        if gain < 0:
+            actions.append(f"[观察] 亏损{gain:.1f}% (定投/避险品种，按计划继续)")
+        else:
+            actions.append(f"[观察] 收益+{gain:.1f}% (定投/避险品种，按计划继续)")
+    elif gain >= rules["take_profit"]:
         actions.append(f"[止盈] 收益+{gain:.1f}%, 超过目标+{rules['take_profit']}%, 建议卖出")
     elif gain <= rules["stop_loss"]:
         actions.append(f"[止损] 亏损{gain:.1f}%, 触及止损{rules['stop_loss']}%, 建议卖出")
@@ -166,7 +174,7 @@ def analyze_fund(fund, rules):
         "name": name, "code": code, "today": today,
         "current_nav": current_nav, "buy_price": buy_price,
         "buy_date": buy_date, "gain": gain, "peak": peak,
-        "drawdown": drawdown, "actions": actions,
+        "drawdown": drawdown, "actions": actions, "type": fund_type,
     }
 
 
@@ -193,7 +201,10 @@ def main():
             lines.append(f"\n{f['name']} - 获取净值失败")
             continue
         lines.append(f"\n{r['name']} ({r['code']})")
-        lines.append(f"  买入价: {r['buy_price']:.4f} ({r['buy_date']})")
+        if r['type'] == 'watch':
+            lines.append(f"  成本价: {r['buy_price']:.4f}")
+        else:
+            lines.append(f"  买入价: {r['buy_price']:.4f} ({r['buy_date']})")
         lines.append(f"  最新: {r['current_nav']:.4f} ({r['today']})")
         lines.append(f"  收益: {'+' if r['gain']>=0 else ''}{r['gain']:.2f}%")
         if r['peak']:
