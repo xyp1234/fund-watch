@@ -15,6 +15,7 @@ FUNDS = [
 ]
 RULES = {"take_profit": 20, "stop_loss": -10, "max_drawdown": 10}
 SENDKEY = os.environ.get("SCT_SENDKEY", "")
+DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 
 # 事件日历: 已知风险节点 (start~end 窗口内预警)
 EVENTS = [
@@ -153,6 +154,73 @@ def check_events(today):
             days_left = (e - t).days
             hits.append({"label": ev["label"], "risk": ev.get("risk", "medium"), "days_left": days_left})
     return hits
+
+
+def llm_analyze(prompt):
+    body = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content":
+                "你是专业的中国公募基金投资顾问，结合用户持有的基金和当前市场数据给出每日操作建议。"
+                "必须只输出严格JSON，不要任何其他文字，格式如下：\n"
+                '{"summary":"一句话总结今日总体判断","funds":{"基金代码":{"advice":"持有或卖出","ratio":0-1的小数表示卖出比例,持有则为0,"reason":"≤50字的中文理由"}}}'
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        "response_format": {"type": "json_object"},
+    }
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + DEEPSEEK_KEY,
+        },
+    )
+    raw = urllib.request.urlopen(req, timeout=60).read()
+    resp = json.loads(raw)
+    return resp["choices"][0]["message"]["content"]
+
+
+def build_llm_prompt(rules, sent_label, sent_data, tech_label, tech_data, events, fund_results, quant_recs):
+    lines = ["以下是今天的基金与市场数据，请据此给出每日操作建议。"]
+    lines.append(f"日期: {datetime.date.today().isoformat()}")
+    lines.append(f"沪深300市场情绪: {sent_label}")
+    if sent_data:
+        lines.append(f"  沪深300={sent_data['current']:.0f}, 近5日{sent_data['chg5']:+.1f}%, 近20日{sent_data['chg20']:+.1f}%")
+    lines.append(f"科创50科技板块情绪: {tech_label}")
+    if tech_data:
+        lines.append(f"  科创50={tech_data['current']:.0f}, 近5日{tech_data['chg5']:+.1f}%, 近20日{tech_data['chg20']:+.1f}%")
+    if events:
+        lines.append("近期风险事件: " + "; ".join(f"{e['label']}(剩{e['days_left']}天)" for e in events))
+    lines.append(f"量化规则: 止盈+{rules['take_profit']}%, 止损{rules['stop_loss']}%, 回撤>{rules['max_drawdown']}%清仓")
+    lines.append("持仓明细:")
+    for r in fund_results:
+        staged = r.get("staged")
+        if staged:
+            stages = sorted(staged, key=lambda s: s["at"])
+            reached = [s for s in stages if r["gain"] >= s["at"]]
+            nxt = next((s for s in stages if r["gain"] < s["at"]), None)
+            stage_desc = "分批止盈档:" + ",".join(f"+{s['at']}%({s['action']})" for s in stages)
+            if reached:
+                stage_desc += f"|当前已触发:{','.join('+{}%'.format(s['at']) for s in reached)}"
+                if nxt:
+                    stage_desc += f"|下一档+{nxt['at']}%"
+        else:
+            stage_desc = "无"
+        q = quant_recs.get(r["code"])
+        quant_txt = ""
+        if q:
+            quant_txt = f"|量化建议:{q['advice']} 比例{q['ratio']:.0%}"
+        chg5_txt = "N/A" if r["chg5"] is None else "{:+.1f}%".format(r["chg5"])
+        chg20_txt = "N/A" if r["chg20"] is None else "{:+.1f}%".format(r["chg20"])
+        lines.append(
+            f"  {r['code']} {r['name']} 类型={r['type']} 成本={r['buy_price']:.4f} "
+            f"最新={r['current_nav']:.4f} 收益={r['gain']:+.1f}% "
+            f"5日={chg5_txt} 20日={chg20_txt} 回撤={r['drawdown']:.1f}% {stage_desc}{quant_txt}"
+        )
+    return "\n".join(lines)
 
 
 def format_ratio(r):
@@ -318,11 +386,15 @@ def main():
     lines.append(f"\n当前规则: 止盈+{rules['take_profit']}% | 止损{rules['stop_loss']}% | 回撤>{rules['max_drawdown']}%清仓")
 
     need_alert = False
+    fund_results = []
+    quant_recs = {}
+    fund_names = {f["code"]: f["name"] for f in FUNDS}
     for fund in FUNDS:
         r = analyze_fund(fund, rules)
         if not r:
             lines.append(f"\n{f['name']} - 获取净值失败")
             continue
+        fund_results.append(r)
         lines.append(f"\n{r['name']} ({r['code']})")
         lines.append(f"  最新: {r['current_nav']:.4f} ({r['today']}) | 收益: {'+' if r['gain']>=0 else ''}{r['gain']:.2f}%")
         if r['chg5'] is not None:
@@ -335,6 +407,7 @@ def main():
                 lines.append(f"  >> [观察] 收益+{r['gain']:.1f}% (定投/避险品种, 按计划继续)")
         else:
             rec = decide_sell(r, rules, sent_label, tech_label, events)
+            quant_recs[r["code"]] = {"advice": rec["advice"], "ratio": rec["ratio"]}
             mv = r['amount'] * (1 + r['gain'] / 100)
             action_tag = "卖出" if rec["ratio"] > 0 else "持有"
             if rec["advice"] == "持有":
@@ -346,6 +419,26 @@ def main():
                 lines.append(f"     · {reason}")
             if rec["ratio"] >= 1 / 3:
                 need_alert = True
+
+    if DEEPSEEK_KEY and fund_results:
+        lines.append("\n" + "=" * 40)
+        lines.append("AI分析 (DeepSeek)")
+        try:
+            prompt = build_llm_prompt(rules, sent_label, sent_data, tech_label, tech_data, events, fund_results, quant_recs)
+            ai_raw = llm_analyze(prompt)
+            ai = json.loads(ai_raw)
+            lines.append(f"总体: {ai.get('summary', '')}")
+            for code, rec in ai.get("funds", {}).items():
+                advice = rec.get("advice", "持有")
+                ratio = rec.get("ratio", 0)
+                reason = rec.get("reason", "")
+                ratio_txt = f"{ratio*100:.0f}%" if ratio and ratio > 0 else "不卖"
+                lines.append(f"  {code} {fund_names.get(code, '')}: {advice} {ratio_txt}")
+                lines.append(f"     AI理由: {reason}")
+                if ratio and ratio >= 0.5:
+                    need_alert = True
+        except Exception as e:
+            lines.append(f"  [AI调用失败, 使用量化判断] {e}")
 
     output = "\n".join(lines)
     print(output)
