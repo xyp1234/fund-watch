@@ -1,4 +1,4 @@
-import urllib.request, urllib.parse, json, re, os, datetime, statistics
+import urllib.request, urllib.parse, json, re, os, time, datetime, statistics
 
 # ===== 配置区 =====
 FUNDS = [
@@ -32,7 +32,9 @@ def fetch_nav(code):
         "Referer": "https://fundf10.eastmoney.com/",
         "User-Agent": "Mozilla/5.0",
     })
-    raw = urllib.request.urlopen(req, timeout=15).read()
+    raw = http_get(req, retries=3)
+    if raw is None:
+        return None
     text = raw.decode("gbk", errors="replace")
     m = re.search(r'"LSJZList":(\[.*?\]),', text)
     if not m:
@@ -47,12 +49,27 @@ def fetch_nav(code):
     return result
 
 
+def http_get(req, retries=3, timeout=20):
+    last_err = None
+    for attempt in range(retries):
+        try:
+            raw = urllib.request.urlopen(req, timeout=timeout).read()
+            return raw
+        except Exception as e:
+            last_err = e
+            time.sleep(2 * (attempt + 1))
+    print("http_get 失败: %s" % last_err)
+    return None
+
+
 def fetch_index_kline(symbol, days=60):
     url = ("http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
            "CN_MarketData.getKLineData?symbol=" + symbol + "&scale=240&datalen=" + str(days))
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    raw = urllib.request.urlopen(req, timeout=15).read()
-    data = json.loads(raw)
+    raw = http_get(req, retries=3)
+    if raw is None:
+        return None
+    data = json.loads(raw.decode("utf-8", errors="replace"))
     if not isinstance(data, list):
         return None
     result = []
