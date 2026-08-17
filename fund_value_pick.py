@@ -71,6 +71,72 @@ def parse_args():
     return parser.parse_args()
 
 
+def send_wechat_notification(title: str, content: str):
+    """发送微信通知（通过Server酱）"""
+    sendkey = os.environ.get("SCT_SENDKEY") or os.environ.get("SCT_APIKEY")
+    if not sendkey:
+        logger.warning("未找到SCT_SENDKEY环境变量，跳过微信通知")
+        return False
+    
+    url = f"https://sctapi.ftqq.com/{sendkey}.send"
+    data = urllib.parse.urlencode({"title": title, "desp": content}).encode("utf-8")
+    
+    try:
+        req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        resp = urllib.request.urlopen(req, timeout=15)
+        result = json.loads(resp.read().decode("utf-8"))
+        if result.get("code") == 0:
+            logger.info("微信通知发送成功")
+            return True
+        else:
+            logger.error(f"微信通知发送失败: {result}")
+            return False
+    except Exception as e:
+        logger.error(f"微信通知发送异常: {e}")
+        return False
+
+
+def generate_notification_content(results: List[dict], market_state: str) -> Tuple[str, str]:
+    """生成通知内容"""
+    # 筛选出推荐基金（综合分>5）
+    recommended = [f for f in results if f.get("final_score", 0) > 5]
+    
+    if not recommended:
+        return None, None
+    
+    title = f"基金扫描提醒 - 发现{len(recommended)}只推荐基金"
+    
+    content_parts = []
+    content_parts.append(f"## 市场状态: {market_state}")
+    content_parts.append("")
+    
+    if market_state == "bull":
+        content_parts.append("牛市环境，可适当积极")
+    elif market_state == "bear":
+        content_parts.append("熊市环境，建议观望为主")
+    else:
+        content_parts.append("震荡环境，谨慎操作")
+    
+    content_parts.append("")
+    content_parts.append("## 推荐基金")
+    content_parts.append("")
+    
+    for i, f in enumerate(recommended[:5], 1):
+        content_parts.append(f"### {i}. {f['code']} {f['name']}")
+        content_parts.append(f"- 综合分: {f.get('final_score', 0):.1f}")
+        content_parts.append(f"- 风险分: {f['risk_score']:.0f}")
+        content_parts.append(f"- 1年收益: {f['1y']:+.2f}%")
+        content_parts.append(f"- 回调模式: {f.get('pullback_pattern', '未知')}")
+        content_parts.append(f"- 建议: {f.get('recommendation', '未知')}")
+        content_parts.append("")
+    
+    content_parts.append("---")
+    content_parts.append("*此消息由基金扫描脚本自动发送*")
+    
+    return title, "\n".join(content_parts)
+
+
 def ensure_dirs():
     """确保缓存和结果目录存在"""
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -913,6 +979,14 @@ def main(config: dict = None):
     print("  ★☆☆ 可关注: 综合分>5 且 风险分<60")
     print("  ☆☆☆ 观望: 其他情况或熊市环境")
     print("=" * 100)
+    
+    # 发送微信通知（如果有推荐基金）
+    title, content = generate_notification_content(results, market_state)
+    if title and content:
+        print("\n发现推荐基金，正在发送微信通知...")
+        send_wechat_notification(title, content)
+    else:
+        print("\n未发现推荐基金，跳过通知")
 
 
 if __name__ == "__main__":
