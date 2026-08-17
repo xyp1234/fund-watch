@@ -1,0 +1,20 @@
+name: 基金扫描提醒
+
+on:
+  schedule:
+    - cron: '0 14 * * 1-5'  # 北京时间22:00（UTC 14:00）
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 运行基金扫描脚本
+        env:
+          SCT_SENDKEY: ${{ secrets.SCT_SENDKEY }}
+        run: python fund_value_pick.py
