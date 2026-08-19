@@ -10,6 +10,7 @@ FUNDS = [
      "staged": []},
 ]
 RULES = {"take_profit": 20, "stop_loss": -10, "max_drawdown": 10}
+STOP_LOSS_ALERT_THRESHOLD = -8  # 接近止损线时提醒（-8%）
 SENDKEY = os.environ.get("SCT_SENDKEY", "")
 DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 
@@ -20,6 +21,86 @@ EVENTS = [
     {"start": "2026-11-01", "end": "2026-11-12", "label": "中美临时关税停火协议到期", "risk": "high"},
 ]
 # =================
+
+
+def check_stop_loss_alert(fund_results, rules):
+    """检查止损预警，返回需要提醒的基金列表"""
+    alerts = []
+    for r in fund_results:
+        gain = r.get("gain", 0)
+        code = r.get("code", "")
+        name = r.get("name", "")
+        current_nav = r.get("current_nav", 0)
+        buy_price = r.get("buy_price", 0)
+        
+        # 计算止损价格
+        stop_loss_price = buy_price * (1 + rules["stop_loss"] / 100)
+        alert_price = buy_price * (1 + STOP_LOSS_ALERT_THRESHOLD / 100)
+        
+        # 检查是否接近止损线
+        if gain <= STOP_LOSS_ALERT_THRESHOLD and gain > rules["stop_loss"]:
+            alerts.append({
+                "code": code,
+                "name": name,
+                "gain": gain,
+                "current_nav": current_nav,
+                "stop_loss_price": stop_loss_price,
+                "alert_price": alert_price,
+                "distance_to_stop": gain - rules["stop_loss"],
+                "level": "warning"  # 接近止损
+            })
+        elif gain <= rules["stop_loss"]:
+            alerts.append({
+                "code": code,
+                "name": name,
+                "gain": gain,
+                "current_nav": current_nav,
+                "stop_loss_price": stop_loss_price,
+                "alert_price": alert_price,
+                "distance_to_stop": 0,
+                "level": "critical"  # 已触发止损
+            })
+    
+    return alerts
+
+
+def send_stop_loss_alert(alerts):
+    """发送止损预警通知"""
+    if not alerts or not SENDKEY:
+        return
+    
+    title = f"⚠️ 止损预警 - {len(alerts)}只基金接近止损线"
+    
+    content_parts = []
+    content_parts.append("## 止损预警")
+    content_parts.append("")
+    
+    for alert in alerts:
+        level_emoji = "🔴" if alert["level"] == "critical" else "🟡"
+        content_parts.append(f"### {level_emoji} {alert['code']} {alert['name']}")
+        content_parts.append(f"- 当前收益: {alert['gain']:+.2f}%")
+        content_parts.append(f"- 当前净值: {alert['current_nav']:.4f}")
+        content_parts.append(f"- 止损价格: {alert['stop_loss_price']:.4f}")
+        content_parts.append(f"- 距止损线: {alert['distance_to_stop']:.2f}%")
+        
+        if alert["level"] == "critical":
+            content_parts.append("- **已触发止损线，建议立即清仓！**")
+        else:
+            content_parts.append(f"- 接近止损线，密切关注！")
+        content_parts.append("")
+    
+    content_parts.append("---")
+    content_parts.append("*此消息由止损预警系统自动发送*")
+    
+    content = "\n".join(content_parts)
+    
+    url = f"https://sctapi.ftqq.com/{SENDKEY}.send"
+    data = urllib.parse.urlencode({"title": title, "desp": content}).encode()
+    try:
+        resp = urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=10)
+        print(f"\n[止损预警推送] {resp.read().decode()}")
+    except Exception as e:
+        print(f"\n[止损预警推送失败] {e}")
 
 
 def fetch_nav(code):
@@ -455,6 +536,17 @@ def main():
 
     output = "\n".join(lines)
     print(output)
+
+    # 检查止损预警
+    stop_loss_alerts = check_stop_loss_alert(fund_results, rules)
+    if stop_loss_alerts:
+        send_stop_loss_alert(stop_loss_alerts)
+        lines.append("\n" + "=" * 40)
+        lines.append("⚠️ 止损预警")
+        for alert in stop_loss_alerts:
+            level_emoji = "🔴" if alert["level"] == "critical" else "🟡"
+            lines.append(f"  {level_emoji} {alert['code']} {alert['name']}: {alert['gain']:+.2f}% (距止损{alert['distance_to_stop']:.2f}%)")
+        output = "\n".join(lines)
 
     if not SENDKEY:
         print("\n[SCT_SENDKEY 未设置, 跳过推送]")
