@@ -9,7 +9,7 @@ FUNDS = [
     {"code": "022364", "name": "华盈科技精选混合A", "buy_price": 3.6179, "buy_date": "", "type": "trade", "amount": 0,
      "staged": []},
 ]
-RULES = {"take_profit": 20, "stop_loss": -10, "max_drawdown": 10}
+RULES = {"take_profit": 15, "stop_loss": -10, "max_drawdown": 10}
 STOP_LOSS_ALERT_THRESHOLD = -8  # 接近止损线时提醒（-8%）
 SENDKEY = os.environ.get("SCT_SENDKEY", "")
 DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
